@@ -1,11 +1,15 @@
-# Custom Command: /pr
+# Custom Command: /pr-ledge
 
-## Verification Step
+## Step 1: User Interview
+1. **Ask:** Use the `AskUserQuestion` tool to ask me: "What is the Jira ID for this PR? (e.g., PROJ-123)".
+2. **Persistence:** Store this ID in memory for the duration of this command.
+
+## Step 2: Verification Step
 1. **Format:** Run `./gradlew ktlintFormat`.
 2. **Build & Test:** Run `./gradlew build`. 
    - *Note:* If the build fails, analyze the stack trace, report the failure to me, and stop. Do not create the PR.
 
-## PR Creation
+## Step 3: PR Creation
 1. **Template:** Read `@.github/pull_request_template.md`.
 2. **Drafting:**
    - Title: Generate a concise title based on the git diff.
