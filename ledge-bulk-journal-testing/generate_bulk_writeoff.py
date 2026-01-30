@@ -626,7 +626,7 @@ WRITEOFF_ACCOUNTS = [
 # CONSTANTS
 # =============================================================================
 
-JIRA_ID = "DCOE-TEST"
+JIRA_ID = "DCOE-9999"
 POSITION = "CP"
 CURRENCY = "STAT"
 LINE_DESCRIPTION = "BULK WRITEOFF TEST - NOT FOR PRODUCTION"
