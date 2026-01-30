@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Generate bulk journal CSV test data with various error scenarios.
+Generate bulk journal CSV test data with a mix of valid entries and error scenarios.
 
-These entries will be published by the bulk tool but should be rejected by
-oracle-gl-publisher or fail GL import.
+These files contain mostly valid entries with a configurable percentage of errors
+that should be rejected by oracle-gl-publisher or fail GL import.
 
 Usage:
-    # Generate all error types (mixed)
-    python generate_error_scenarios.py --entries 100 --output errors.csv
+    # 1000 entries with 10% errors (100 errors at the end)
+    python generate_error_scenarios.py --entries 1000 --error-percent 10 --output mixed.csv
 
-    # Generate specific error type only
-    python generate_error_scenarios.py --entries 100 --error-type unbalanced --output unbalanced.csv
-    python generate_error_scenarios.py --entries 100 --error-type invalid-asset --output bad_assets.csv
-    python generate_error_scenarios.py --entries 100 --error-type invalid-account --output bad_accounts.csv
-    python generate_error_scenarios.py --entries 100 --error-type invalid-natural-acct --output bad_natural.csv
-    python generate_error_scenarios.py --entries 100 --error-type future-date --output future_dates.csv
+    # 1000 entries with 5% errors scattered throughout
+    python generate_error_scenarios.py --entries 1000 --error-percent 5 --shuffle --output scattered.csv
+
+    # 100% errors (all entries are errors) - legacy behavior
+    python generate_error_scenarios.py --entries 100 --error-percent 100 --output all_errors.csv
+
+    # Specific error type only (10% of entries)
+    python generate_error_scenarios.py --entries 1000 --error-percent 10 --error-type unbalanced --output unbalanced.csv
 """
 
 import csv
@@ -22,11 +24,11 @@ import random
 import argparse
 from decimal import Decimal
 from datetime import date, timedelta
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Optional
 from collections import defaultdict
 
 # =============================================================================
-# VALID STAGING DATA (subset for generating mostly-valid entries with one error)
+# VALID STAGING DATA
 # =============================================================================
 
 VALID_ASSETS = [
@@ -63,7 +65,6 @@ WRITEOFF_ACCOUNTS = [
 # INVALID DATA FOR ERROR SCENARIOS
 # =============================================================================
 
-# Asset IDs that don't exist in staging
 INVALID_ASSET_IDS = [
     "00000000000000099999",  # Non-existent
     "00000000000000000001",  # Too low
@@ -72,7 +73,6 @@ INVALID_ASSET_IDS = [
     "",                       # Empty
 ]
 
-# Account IDs that don't exist
 INVALID_ACCOUNT_IDS = [
     ("XXXXXX99999", "000000"),   # Non-existent account
     ("", "000000"),              # Empty account
@@ -80,7 +80,6 @@ INVALID_ACCOUNT_IDS = [
     ("SHORT", "000000"),         # Too short
 ]
 
-# Natural accounts that won't match the sub-account type
 MISMATCHED_NATURAL_ACCOUNTS = [
     "999999",  # Non-existent natural account
     "123456",  # Random invalid
@@ -91,10 +90,9 @@ MISMATCHED_NATURAL_ACCOUNTS = [
 # CONSTANTS
 # =============================================================================
 
-JIRA_ID = "DCOE-ERROR-TEST"
+JIRA_ID = "DCOE-TEST"
 POSITION = "CP"
 CURRENCY = "STAT"
-LINE_DESCRIPTION = "ERROR SCENARIO TEST - EXPECTED TO FAIL"
 TRANS_SUBCODE = ""
 FX_RATE = "1"
 BUSINESS_UNIT = "DISC"
@@ -138,14 +136,46 @@ def format_amount(amount: Decimal) -> str:
     return f"{amount:.10f}"
 
 
+def generate_valid_entry(
+    entry_num: int,
+    accounting_date: str
+) -> List[List[str]]:
+    """Generate a valid (balanced) entry pair."""
+    asset_id = random.choice(VALID_ASSETS)
+    source_acct, source_natural = random.choice(VALID_ACCOUNTS)
+    dest_acct, dest_natural = random.choice(WRITEOFF_ACCOUNTS)
+    amount = generate_random_amount()
+    amount_str = format_amount(amount)
+
+    description = "VALID ENTRY - SHOULD PASS"
+
+    del_line = [
+        str(entry_num), JIRA_ID, asset_id, POSITION, accounting_date,
+        source_natural, source_acct, "DEL", CURRENCY,
+        amount_str, "",  # DR, CR
+        description, TRANS_SUBCODE, FX_RATE, BUSINESS_UNIT,
+        BV_DELTA, BV_DELTA, RELATED_ASSET_ID, COMMISSION,
+        REFERENCE_VALUE, REFERENCE_TYPE, EXTERNAL_SOURCE
+    ]
+
+    rec_line = [
+        str(entry_num), JIRA_ID, asset_id, POSITION, accounting_date,
+        dest_natural, dest_acct, "REC", CURRENCY,
+        "", amount_str,  # DR, CR
+        description, TRANS_SUBCODE, FX_RATE, BUSINESS_UNIT,
+        BV_DELTA, BV_DELTA, RELATED_ASSET_ID, COMMISSION,
+        REFERENCE_VALUE, REFERENCE_TYPE, EXTERNAL_SOURCE
+    ]
+
+    return [del_line, rec_line]
+
+
 def generate_error_entry(
     entry_num: int,
     error_type: str,
     accounting_date: str
 ) -> List[List[str]]:
     """Generate an entry pair with a specific error type."""
-
-    # Start with valid data
     asset_id = random.choice(VALID_ASSETS)
     source_acct, source_natural = random.choice(VALID_ACCOUNTS)
     dest_acct, dest_natural = random.choice(WRITEOFF_ACCOUNTS)
@@ -154,20 +184,16 @@ def generate_error_entry(
     cr_amount = format_amount(amount)
     entry_date = accounting_date
 
-    # Description indicates the error type
-    description = f"ERROR TEST: {error_type.upper()}"
+    description = f"ERROR: {error_type.upper()}"
 
     # Apply the error
     if error_type == "unbalanced":
-        # CR is different from DR
         cr_amount = format_amount(amount + Decimal("0.0000000001"))
 
     elif error_type == "invalid-asset":
-        # Use non-existent asset ID
         asset_id = random.choice(INVALID_ASSET_IDS)
 
     elif error_type == "invalid-account":
-        # Use non-existent account
         invalid = random.choice(INVALID_ACCOUNT_IDS)
         if random.choice([True, False]):
             source_acct, source_natural = invalid
@@ -175,86 +201,47 @@ def generate_error_entry(
             dest_acct, dest_natural = invalid
 
     elif error_type == "invalid-natural-acct":
-        # Use mismatched natural account
         if random.choice([True, False]):
             source_natural = random.choice(MISMATCHED_NATURAL_ACCOUNTS)
         else:
             dest_natural = random.choice(MISMATCHED_NATURAL_ACCOUNTS)
 
     elif error_type == "future-date":
-        # Date 30+ days in future
         future = date.today() + timedelta(days=random.randint(30, 365))
         entry_date = future.isoformat()
 
     elif error_type == "past-date":
-        # Date in closed period (>2 years ago)
         past = date.today() - timedelta(days=random.randint(730, 1000))
         entry_date = past.isoformat()
 
     elif error_type == "missing-amount":
-        # Both DR and CR empty
         dr_amount = ""
         cr_amount = ""
 
     elif error_type == "negative-amount":
-        # Negative amounts
         dr_amount = format_amount(-amount)
         cr_amount = format_amount(-amount)
 
     elif error_type == "zero-amount":
-        # Zero amounts
         dr_amount = "0.0000000000"
         cr_amount = "0.0000000000"
 
-    # Build the lines
     del_line = [
-        str(entry_num),
-        JIRA_ID,
-        asset_id,
-        POSITION,
-        entry_date,
-        source_natural,
-        source_acct,
-        "DEL",
-        CURRENCY,
-        dr_amount,
-        "",
-        description,
-        TRANS_SUBCODE,
-        FX_RATE,
-        BUSINESS_UNIT,
-        BV_DELTA,
-        BV_DELTA,
-        RELATED_ASSET_ID,
-        COMMISSION,
-        REFERENCE_VALUE,
-        REFERENCE_TYPE,
-        EXTERNAL_SOURCE
+        str(entry_num), JIRA_ID, asset_id, POSITION, entry_date,
+        source_natural, source_acct, "DEL", CURRENCY,
+        dr_amount, "",
+        description, TRANS_SUBCODE, FX_RATE, BUSINESS_UNIT,
+        BV_DELTA, BV_DELTA, RELATED_ASSET_ID, COMMISSION,
+        REFERENCE_VALUE, REFERENCE_TYPE, EXTERNAL_SOURCE
     ]
 
     rec_line = [
-        str(entry_num),
-        JIRA_ID,
-        asset_id,
-        POSITION,
-        entry_date,
-        dest_natural,
-        dest_acct,
-        "REC",
-        CURRENCY,
-        "",
-        cr_amount,
-        description,
-        TRANS_SUBCODE,
-        FX_RATE,
-        BUSINESS_UNIT,
-        BV_DELTA,
-        BV_DELTA,
-        RELATED_ASSET_ID,
-        COMMISSION,
-        REFERENCE_VALUE,
-        REFERENCE_TYPE,
-        EXTERNAL_SOURCE
+        str(entry_num), JIRA_ID, asset_id, POSITION, entry_date,
+        dest_natural, dest_acct, "REC", CURRENCY,
+        "", cr_amount,
+        description, TRANS_SUBCODE, FX_RATE, BUSINESS_UNIT,
+        BV_DELTA, BV_DELTA, RELATED_ASSET_ID, COMMISSION,
+        REFERENCE_VALUE, REFERENCE_TYPE, EXTERNAL_SOURCE
     ]
 
     return [del_line, rec_line]
@@ -263,56 +250,106 @@ def generate_error_entry(
 def generate_csv(
     num_entries: int,
     output_path: str,
+    error_percent: float = 10.0,
     error_type: Optional[str] = None,
-    accounting_date: str = None
+    accounting_date: str = None,
+    shuffle: bool = False
 ) -> None:
-    """Generate the error scenarios CSV file."""
+    """Generate CSV with mix of valid and error entries.
 
+    Args:
+        num_entries: Total number of journal entries
+        output_path: Path to output CSV file
+        error_percent: Percentage of entries that should have errors (0-100)
+        error_type: Specific error type or 'mixed' for random mix
+        accounting_date: Accounting date (YYYY-MM-DD), defaults to today
+        shuffle: If True, shuffle errors throughout; if False, errors at end
+    """
     if accounting_date is None:
         accounting_date = date.today().isoformat()
 
-    # Determine which error types to use
+    # Calculate counts
+    num_errors = int(num_entries * error_percent / 100)
+    num_valid = num_entries - num_errors
+
+    # Determine error types to use
     if error_type and error_type != "mixed":
         if error_type not in ERROR_TYPES:
-            raise ValueError(f"Unknown error type: {error_type}. Valid types: {ERROR_TYPES}")
+            raise ValueError(f"Unknown error type: {error_type}. Valid: {ERROR_TYPES}")
         error_types_to_use = [error_type]
     else:
         error_types_to_use = ERROR_TYPES
 
-    print(f"Generating {num_entries} error entries ({num_entries * 2} rows)...")
-    print(f"Error types: {error_types_to_use}")
-    print(f"Base accounting date: {accounting_date}")
+    print(f"Generating {num_entries} total entries ({num_entries * 2} rows)...")
+    print(f"  Valid entries: {num_valid} ({100 - error_percent:.1f}%)")
+    print(f"  Error entries: {num_errors} ({error_percent:.1f}%)")
+    print(f"  Error types: {error_types_to_use}")
+    print(f"  Accounting date: {accounting_date}")
+    print(f"  Shuffle mode: {shuffle}")
 
-    # Track counts per error type
+    # Build list of (is_error, error_type) for each entry
+    entries_plan = []
+    entries_plan.extend([(False, None)] * num_valid)
+    for _ in range(num_errors):
+        err_type = random.choice(error_types_to_use)
+        entries_plan.append((True, err_type))
+
+    if shuffle:
+        random.shuffle(entries_plan)
+    # else: valid entries first, errors at end (default)
+
+    # Track stats
     error_counts = defaultdict(int)
+    valid_count = 0
 
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADERS)
 
-        for entry_num in range(1, num_entries + 1):
-            # Pick error type
-            err_type = random.choice(error_types_to_use)
-            error_counts[err_type] += 1
+        for entry_num, (is_error, err_type) in enumerate(entries_plan, start=1):
+            if is_error:
+                rows = generate_error_entry(entry_num, err_type, accounting_date)
+                error_counts[err_type] += 1
+            else:
+                rows = generate_valid_entry(entry_num, accounting_date)
+                valid_count += 1
 
-            rows = generate_error_entry(entry_num, err_type, accounting_date)
             writer.writerows(rows)
 
+            if entry_num % 50000 == 0:
+                print(f"  Generated {entry_num} entries...")
+
     print(f"\nDone! Output: {output_path}")
-    print("\nError type distribution:")
-    for err_type, count in sorted(error_counts.items()):
-        print(f"  {err_type}: {count}")
+    print(f"\nSummary:")
+    print(f"  Valid entries: {valid_count}")
+    if error_counts:
+        print(f"  Error entries by type:")
+        for err_type, count in sorted(error_counts.items()):
+            print(f"    {err_type}: {count}")
 
     import os
-    size_kb = os.path.getsize(output_path) / 1024
-    print(f"\nFile size: {size_kb:.2f} KB")
+    size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    print(f"\nFile size: {size_mb:.2f} MB")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate bulk journal CSV with error scenarios",
+        description="Generate bulk journal CSV with configurable error percentage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f"""
+        epilog="""
+Examples:
+  # 1000 entries with 10% errors at the end
+  python generate_error_scenarios.py --entries 1000 --error-percent 10
+
+  # 1000 entries with 5% errors shuffled throughout
+  python generate_error_scenarios.py --entries 1000 --error-percent 5 --shuffle
+
+  # Only unbalanced errors (10% of 1000 = 100 unbalanced entries)
+  python generate_error_scenarios.py --entries 1000 --error-percent 10 --error-type unbalanced
+
+  # 100% errors (legacy behavior)
+  python generate_error_scenarios.py --entries 100 --error-percent 100
+
 Error types:
   unbalanced           DR != CR (will fail balancing validation)
   invalid-asset        Non-existent asset ID
@@ -326,18 +363,29 @@ Error types:
   mixed                Random mix of all error types (default)
 """
     )
-    parser.add_argument("--entries", type=int, default=100,
-                        help="Number of error entries (default: 100)")
+    parser.add_argument("--entries", type=int, default=1000,
+                        help="Total number of entries (default: 1000)")
     parser.add_argument("--output", type=str, default="error_scenarios.csv",
                         help="Output file path")
+    parser.add_argument("--error-percent", type=float, default=10.0,
+                        help="Percentage of entries with errors (default: 10)")
     parser.add_argument("--error-type", type=str, default="mixed",
                         choices=ERROR_TYPES + ["mixed"],
                         help="Specific error type or 'mixed' for all")
     parser.add_argument("--date", type=str, default=None,
-                        help="Base accounting date (YYYY-MM-DD)")
+                        help="Accounting date (YYYY-MM-DD)")
+    parser.add_argument("--shuffle", action="store_true",
+                        help="Shuffle errors throughout (default: errors at end)")
 
     args = parser.parse_args()
-    generate_csv(args.entries, args.output, args.error_type, args.date)
+    generate_csv(
+        args.entries,
+        args.output,
+        args.error_percent,
+        args.error_type,
+        args.date,
+        args.shuffle
+    )
 
 
 if __name__ == "__main__":

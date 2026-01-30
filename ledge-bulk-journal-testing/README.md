@@ -36,17 +36,26 @@ python generate_bulk_writeoff.py --entries 1000 --no-writeoff-accounts --output 
 
 ### Generate Error Scenarios
 
-These entries will pass Ledge validation but should fail in oracle-gl-publisher or GL import:
+Generate files with mostly valid entries and a configurable percentage of errors:
 
 ```bash
-# Mixed error types (random distribution)
-python generate_error_scenarios.py --entries 100 --output errors.csv
+# 1000 entries with 10% errors at the end (90 valid, then 10 errors)
+python generate_error_scenarios.py --entries 1000 --error-percent 10 --output mixed.csv
 
-# Specific error type only
-python generate_error_scenarios.py --entries 100 --error-type unbalanced --output unbalanced.csv
-python generate_error_scenarios.py --entries 100 --error-type invalid-asset --output bad_assets.csv
-python generate_error_scenarios.py --entries 100 --error-type invalid-account --output bad_accounts.csv
+# 1000 entries with 5% errors shuffled throughout
+python generate_error_scenarios.py --entries 1000 --error-percent 5 --shuffle --output scattered.csv
+
+# Specific error type only (10% unbalanced errors)
+python generate_error_scenarios.py --entries 1000 --error-percent 10 --error-type unbalanced --output unbalanced.csv
+
+# 100% errors (all entries are errors)
+python generate_error_scenarios.py --entries 100 --error-percent 100 --output all_errors.csv
 ```
+
+**Options:**
+- `--error-percent`: Percentage of entries with errors (default: 10)
+- `--shuffle`: Scatter errors throughout instead of placing them at the end
+- `--error-type`: Use only one error type (default: mixed)
 
 **Available error types:**
 
