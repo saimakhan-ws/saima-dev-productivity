@@ -1,0 +1,7 @@
+# Raw data files - contain ticket/slack data, regenerate locally
+raw/
+# Generated HTML - regenerate with: node tools/generate-site.js
+oncall-kb.html
+# Architecture raw data (large JSON files)
+architecture/archviz-data.json
+architecture/archviz-summary.json
