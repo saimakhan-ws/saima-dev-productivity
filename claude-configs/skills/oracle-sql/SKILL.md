@@ -1,3 +1,8 @@
+---
+name: oracle-sql
+description: Use when generating Oracle EBS SQL queries for ad-hoc investigation — journals, posting/unposted status, GL batches/headers/lines, assets/listings, accounts, XXBRK entries, GL Interface, reversals, idempotency key lookups, COA segment lookups
+---
+
 # Oracle SQL Skill
 
 **Trigger:** Use this skill when generating Oracle EBS SQL queries for ad-hoc investigation — journals, posting/unposted status, GL batches/headers/lines, assets, listings, accounts, XXBRK entries, GL Interface, reversals, idempotency key lookups.

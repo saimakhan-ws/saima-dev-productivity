@@ -1,3 +1,8 @@
+---
+name: ledge-sql
+description: Use when generating Ledge PostgreSQL SQL queries for ad-hoc investigation — journals, approvals, rejections, journal lines, downstream request ID lookups, creator/approver searches, request status, book value changes, asset/account lookups
+---
+
 # Ledge PostgreSQL SQL Skill
 
 **Trigger:** Use this skill when generating Ledge Postgres SQL queries for ad-hoc investigation — journals, approvals, rejections, journal lines, accounts, assets, request status, book value changes.
