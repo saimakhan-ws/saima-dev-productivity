@@ -45,6 +45,7 @@
 - [Client Asking to Confirm Amounts Seen In-App](#client-asking-to-confirm-amounts-seen-in-app)
 - [Investigating and Resolving Missing CP Lines](#investigating-and-resolving-missing-cp-lines)
 - [Correct Wrong Book Value After Stock Split](#correct-wrong-book-value-after-stock-split)
+- [Diagnose Transfer-In BV_DR/BV_CR Swap (LO-2610)](#diagnose-transfer-in-bv_drbv_cr-swap)
 
 ---
 
@@ -857,3 +858,198 @@ See: [Investigating and Resolving missing CP Lines](https://www.notion.so/2cd411
 |------|----|-------|
 | GL_PUBLISHER | 5468 | created_by value for GL Publisher records |
 | XX_LEDGER_EXEC | -- | Credentials in 1Password. Use for direct Oracle updates. Connect via service name (pws1e for prod). |
+
+---
+
+## Investigating EF04 (Invalid Accounting Flexfield) Errors
+
+**When**: Monitor "Activity failed in GL_INTERFACE" fires with errorCodes containing EF04.
+
+### Step 1: Find the failing activity
+```
+Datadog Logs: service:oracle-gl-publisher @appenv:production status:error "Import failed"
+```
+Note the `idempotencyKey`, `groupId`, and `activityType` from the log.
+
+### Step 2: Check GL_INTERFACE for the group
+```sql
+-- Preset (Redshift)
+SELECT segment1, segment2, segment3, segment4, segment5, segment6,
+       status, reference1, reference4, currency_code, accounting_date,
+       request_id
+FROM ledger_interface_gl_views.gl_interface
+WHERE group_id = <GROUP_ID>;
+```
+
+### Step 3: Identify the bad segment value
+The Oracle Import Execution Report will specify which segment is invalid. Common culprits:
+- **segment4** (Sub Account) — account not synced to Oracle
+- **segment5** (Asset ID) — security not in SEC_MA value set, or end-dated
+- **segment3** (Natural Account) — new account code not yet created
+
+### Step 4: For SEC_MA issues (segment5 / Asset ID)
+```sql
+-- Oracle: Check if value exists and is active in SEC_MA
+SELECT flex_value, enabled_flag, start_date_active, end_date_active
+FROM applsys.fnd_flex_values_vl
+WHERE flex_value_set_id = (
+  SELECT flex_value_set_id FROM applsys.fnd_flex_value_sets
+  WHERE flex_value_set_name = 'SEC_MA'
+)
+AND flex_value = '<PADDED_ASSET_ID>';
+```
+If `end_date_active` is set and in the past, the value is expired → contact #sec-data-oncall or #oracle-support.
+
+### Step 5: Re-import after fix
+Once the value is re-enabled, re-import the group using the standard re-import procedure.
+
+---
+
+## Trade Settlement Date Correction via Ledge
+
+**When**: Someone settled a trade on the wrong date and needs it corrected.
+
+### Using the Trade Corrections form
+1. Go to **Ledge Prod** → **Orders & Trades** → **Trade Corrections** (OrderSelectionForm)
+2. Search for the trade by trade number
+3. Select the trade → choose **Settlement Date Correction**
+4. Enter the correct settlement date and a reason code
+5. Submit
+
+**Required role**: `ledge-tc-sdi-trade-desk`
+
+**What it does**: Calls SO-Orders' `CorrectOrder` GraphQL mutation. SO-Orders handles reversing old GL entries and creating new ones with the correct date.
+
+### If they need a full reversal instead
+- The Ledge **Activity Reversal** tool can reverse settlements
+- Required role: `ledge-reverse-batch-settlements`
+- **Always require a Jira ticket first** (EOC or LW board) for audit trail
+
+---
+
+## Checking Oracle Connectivity During an Incident
+
+**When**: Suspecting Oracle DB connectivity issues (ORA-03113, ORA-01653, timeouts).
+
+### Quick checks (in order):
+1. **[Oracle Status Dashboard](https://app.datadoghq.com/dashboard/2ct-x2w-ckj)** — Is Oracle itself healthy?
+2. **[GL Publisher System Dashboard](https://app.datadoghq.com/dashboard/2ab-j69-39j)** — Is GL Publisher seeing Oracle?
+3. **[Concurrent Managers](https://app.datadoghq.com/dashboard/5bv-qni-bpt)** — Are import jobs running or stuck?
+4. **#oracle-support** Slack — Has someone already flagged it?
+
+### Check if ImportCheckService is running:
+```
+Datadog Logs: service:oracle-gl-publisher @appenv:production "Scheduled Import Job Running"
+```
+If no recent logs → the job may be dead. Check pod health in Argo.
+
+---
+
+## Diagnose Transfer-In Book Value Bug
+
+> **LO-2610** | First seen: Sep 2025 | Fixed in Ledge PR #3213 (deployed ~Feb 2026)
+
+**Symptom:** Customer or ops reports $0 book cost after a Client Transfer In. Downstream: `bv_delta = BV_DR - BV_CR = 0 - X = negative` → clamped to $0 in positions/T5008.
+
+**Root cause:** The Ledge form builder sent `destinationBvDelta` with the wrong sign (negative instead of positive). Oracle GL wrote `attribute12 (BV_CR) = X`, `attribute11 (BV_DR) = 0` on the client account line. Fixed in Ledge PR #3213 for new submissions. Historical records need the BV correction tool.
+
+---
+
+### Quick Diagnostic — Is this the BV_DR/BV_CR swap bug?
+
+```sql
+-- Check if a transfer-in line has BV on the wrong side
+-- BV_CR should be 0 for a client receiving securities; BV_DR should have the value
+SELECT
+    l.effective_date,
+    l.attribute3        AS tx_type,
+    l.description,
+    l.attribute11       AS bv_dr,   -- should be non-zero for Transfer In client line
+    l.attribute12       AS bv_cr,   -- should be 0 for Transfer In client line
+    c.segment4          AS account_id,
+    c.segment5          AS listing_id
+FROM apps.xxglarc_gl_je_lines l
+JOIN apps.xxglarc_gl_je_headers h ON l.je_header_id = h.je_header_id
+JOIN apps.gl_code_combinations c  ON l.code_combination_id = c.code_combination_id
+WHERE c.segment4 = '<ACCOUNT_ID>'
+  AND l.attribute3 IN ('TRFIN','E_TRFIN','TRFINTF','MBTRFIN','RSPTRFIN','SRSPTRFIN','AFT_IN')
+  AND l.effective_date >= DATE '2025-09-24'
+  AND h.ledger_id = 1
+ORDER BY l.effective_date DESC;
+```
+
+**It's this bug if:** `bv_dr = 0` AND `bv_cr = <book value amount>` on the "Transfer In" description line.
+**Affected window:** effective_date >= 2025-09-24 (GL Publisher migration) to ~Feb 2026 (when Ledge fix deployed).
+
+---
+
+### Remediation
+
+**Step 1 — Fix Oracle GL** (cs-tools BV correction tool)
+
+1. Identify affected `je_header_id` + `je_line_num` pairs from the query above
+2. Create a BV correction work item via [Atlas Book Value Correction Tool](https://atlas.wealthsimple.com/tools/book_value_correction_tool/request-correction)
+   - `bv_delta_old` = current wrong value (on CR side)
+   - `bv_delta_new` = corrected value (move to DR side, i.e. attribute11)
+3. OR raise an Oracle data fix PR in cs-tools (see [LO-2610 cs-tools PR pattern](https://github.com/wealthsimple/cs-tools/pull/7881))
+
+> **Why not a reversing journal entry?** `attribute11`/`attribute12` are cost-basis metadata flex fields, NOT the primary double-entry accounting columns. The securities movement (`entered_dr`/`entered_cr`) is correct. Fixing the flex fields directly is the right approach — a reversal would unwind correct accounting and risk double-counting in SHOVEL views.
+
+**Step 2 — Verify Oracle fix propagated** (auto, ~30 min)
+
+The SHOVEL views recompute `BV_DELTA = attribute11 - attribute12` on every query, so once Oracle is fixed tx-streamer picks it up within 30 minutes. No action needed.
+
+**Step 3 — Positions-calculator reprocessing** (manual, BOR team)
+
+Oracle GL fix does NOT automatically update Kratos positions. Escalate to BOR team (#bor-write-on-call) to reprocess affected accounts in the positions-calculator for the corrected BV to flow through.
+
+**Step 4 — T5008 impact check** (if disposals occurred in 2025)
+
+```sql
+-- Find affected accounts that SOLD the transferred-in securities before year-end
+-- Run this to assess T5008 remediation scope
+SELECT
+    c.segment4          AS account_id,
+    c.segment5          AS listing_id,
+    l.effective_date    AS sell_date,
+    l.attribute3        AS sell_type,
+    l.entered_cr        AS qty_sold
+FROM apps.xxglarc_gl_je_lines l
+JOIN apps.xxglarc_gl_je_headers h ON l.je_header_id = h.je_header_id
+JOIN apps.gl_code_combinations c  ON l.code_combination_id = c.code_combination_id
+WHERE c.segment4 = '<ACCOUNT_ID>'
+  AND l.attribute3 IN ('SL','SELL','TRSELL','RED','TRFOUT','E_TRFOUT','TRFOUTF')
+  AND l.effective_date BETWEEN DATE '2025-09-24' AND DATE '2025-12-31'
+  AND l.entered_cr > 0
+  AND h.ledger_id = 1;
+```
+
+If disposals exist → **escalate to tax/finance team immediately**. T5008 Box 20 (cost/book value) will show $0 for those disposals. Amended T5008s may be required before the CRA March 31 filing deadline.
+
+---
+
+### T5008 Data Chain (compressed)
+
+```
+Oracle GL (attribute11/attribute12)
+  └─ [auto, 30 min] → tx-streamer → bor-oracle-gl-transactions Kafka
+       └─ [manual trigger needed] → positions-calculator → Kratos PostgreSQL
+            └─ [manual trigger needed] → Leapfrog-for → S3 CSV receipts
+                 └─ [manual rerun needed] → spark-report-processor T5008 Spark job
+                      └─ T5008 Box 20 (adjusted_book_cost)
+```
+
+Fixing Oracle GL fixes steps 1-2 automatically. Steps 3-5 require explicit coordination with BOR and Data/Tax teams.
+
+---
+
+### Key Facts
+| Field | Value |
+|-------|-------|
+| Affected tx types | TRFIN, E_TRFIN, TRFINTF, MBTRFIN, RSPTRFIN, SRSPTRFIN, AFT_IN |
+| Affected window | 2025-09-24 → ~2026-02 (Ledge fix deployed) |
+| Oracle column | attribute11 = BV_DR (debit), attribute12 = BV_CR (credit) |
+| Bug: client Transfer In line | attribute11 = 0, attribute12 = X (wrong — should be reversed) |
+| Fix: cs-tools pattern | [PR #7881](https://github.com/wealthsimple/cs-tools/pull/7881) |
+| Ledge code fix | [PR #3213](https://github.com/wealthsimple/ledge/pull/3213) |
+| T5008 source | spark-report-processor reads Kratos (NOT Oracle GL directly) |

@@ -160,3 +160,34 @@ ws deploy -a ledge -e production -b <previous-sha>
 - **Sticky sessions** (session affinity) are required. Verify ingress config after any infra changes.
 - Deploy during low-usage windows when possible (outside business hours)
 - If deploying to fix HikariCP exhaustion, a rolling restart is sufficient -- no code change needed
+
+## Trade Corrections
+
+Ledge has a built-in Trade Corrections system (`OrderSelectionForm`) that handles several correction types via SO-Orders' GraphQL API:
+
+| Correction Type | What it does | Role Required |
+|----------------|-------------|---------------|
+| **Settlement Date Correction** | Changes the settlement date on a trade | `ledge-tc-sdi-trade-desk` |
+| **Bust Order** | Cancels/busts a filled order | `ledge-tc-sdi-trade-desk` |
+| **Cancel to Inventory** | Moves order to inventory | `ledge-tc-sdi-trade-desk` |
+| **Due-A-Fill** | Fills an order that was due a fill | `ledge-tc-sdi-trade-desk` |
+| **Price Improvement** | Corrects the fill price | `ledge-tc-sdi-trade-desk` |
+| **Broker Price Improvement** | Corrects broker-side price | `ledge-tc-sdi-trade-desk` |
+
+**Path in Ledge**: Orders & Trades → Trade Corrections (OrderSelectionForm)
+
+**How it works**: The `BulkTradeCorrectionService` calls `SingleOrderTradeCorrectionService` which makes a `CorrectOrder` GraphQL mutation to SO-Orders. SO-Orders handles the downstream GL entry reversal/reposting automatically.
+
+**Audit requirement**: All corrections should have a Jira ticket (EOC or LW board) for audit trail.
+
+## Reversal Roles
+
+| Role | What it permits |
+|------|----------------|
+| `ledge-reversal` | General reversal access |
+| `ledge-reverse-batch-admin` | Admin batch reversals |
+| `ledge-reverse-batch-corp-actions` | Corporate action reversals |
+| `ledge-reverse-batch-manual-journals` | Manual journal reversals |
+| `ledge-reverse-batch-options` | Options batch reversals |
+| `ledge-reverse-batch-settlements` | Settlement batch reversals |
+| `ledge-reverse-manual-journals` | Individual manual journal reversals |

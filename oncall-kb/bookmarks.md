@@ -98,3 +98,33 @@ Use these boards to route tickets to the correct team when they are not BOR Writ
 
 - [Oracle error codes doc](https://docs.google.com/document/d/1NBzW9SGCuRw4nmkUsmo5kTFm99SUMTOG-t91uiD8L7U/edit#bookmark=id.2jxsxqh) -- Reference for interpreting Oracle error codes seen in GL Publisher logs
 - [How To Internal Transfer Reversals](https://docs.google.com/document/d/1tEw1QxCE6d71xQtugITTcKsbbCJvvj5D6DOmLh3I014/edit?tab=t.0) -- Step-by-step guide for reversing internal transfers
+
+## Datadog Log Search Templates
+
+- [GL Publisher error logs (production)](https://app.datadoghq.com/logs?query=service%3Aoracle-gl-publisher%20%40appenv%3Aproduction%20status%3Aerror&live=true) — All error-level logs from GL Publisher prod
+- [GL Publisher failed imports](https://app.datadoghq.com/logs?query=service%3Aoracle-gl-publisher%20%40appenv%3Aproduction%20status%3Aerror%20%22Import%20failed%22&live=true) — Activities that failed Oracle GL import (EF04, etc.)
+- [Search by idempotency key (template)](https://app.datadoghq.com/logs?query=service%3Aoracle-gl-publisher%20%40appenv%3Aproduction%20%40idempotency_key%3AREPLACE_KEY_HERE&live=true) — Replace REPLACE_KEY_HERE with the actual key
+- [ImportCheckService scheduled job logs](https://app.datadoghq.com/logs?query=service%3Aoracle-gl-publisher%20%40appenv%3Aproduction%20%22Scheduled%20Import%20Job%20Running%22&live=true) — Verify ImportCheckService is running
+
+## Oracle Health Dashboards
+
+- [Oracle Status (main)](https://app.datadoghq.com/dashboard/2ct-x2w-ckj/oracle-status) — Active sessions, physical reads, ASM disk space
+- [Oracle Concurrent Managers](https://app.datadoghq.com/dashboard/5bv-qni-bpt) — Running/pending import jobs (if backed up, imports are stuck)
+- [Oracle EBS XXBRK Jobs](https://app.datadoghq.com/dashboard/mv8-r7r-xd7) — Pending pricing, funding, dividends jobs
+- [Oracle TWS2E (prod DB)](https://app.datadoghq.com/dashboard/pxt-dfm-rba) — Host CPU, disk, posted/unposted batches
+- [Oracle Prod Instances](https://app.datadoghq.com/dashboard/44z-9yf-usq) — CPU, memory, disk for sws1e hosts
+
+## Import Check Monitors
+
+- [Activity failed in GL_INTERFACE (prod)](https://app.datadoghq.com/monitors/252144447) — Fires when any activity has import error
+- [ImportCheckService not running (prod)](https://app.datadoghq.com/monitors/118892874) — Heartbeat monitor for the scheduled job
+- [Imports processing slowly (prod)](https://app.datadoghq.com/monitors/123025527) — Oldest import > 2 hours = critical
+- [ImportCheckService running slowly (prod)](https://app.datadoghq.com/monitors/127895213) — p95 batch duration > 120s
+
+## Oracle Error Monitors (alert to #oracle-support)
+
+- [ORA-1631 Max extents in table](https://app.datadoghq.com/monitors/108489269)
+- [ORA-1632 Max extents in index](https://app.datadoghq.com/monitors/156872643)
+- [ORA-1630 Max extents in temp tablespace](https://app.datadoghq.com/monitors/108489266)
+- [ORA-1654 Unable to extend index](https://app.datadoghq.com/monitors/108489261)
+- [ORA-01555 Snapshot too old](https://app.datadoghq.com/monitors/108489259)
