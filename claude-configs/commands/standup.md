@@ -126,9 +126,15 @@ gh search prs --author @me --created ">=$CUTOFF" --json title,repository,number,
 
 # PRs reviewed
 gh search prs --reviewed-by @me --updated ">=$CUTOFF" --json title,repository,number,state,url --limit 20
+
+# PRs updated (pushed commits, responded to comments, etc.)
+gh search prs --involves @me --updated ">=$CUTOFF" --json title,repository,number,state,url --limit 20
 ```
 
-Format authored PRs as individual bullets. Format reviewed PRs as a single bullet with a comma-separated list.
+Deduplicate across the three lists (a PR may appear in multiple). Format:
+- Authored PRs as individual bullets
+- Reviewed PRs as a single bullet with a comma-separated list
+- PRs that only appear in the "updated" list (not authored or reviewed) — include as "Updated/worked on: repo#123, repo#456"
 
 ### Subagent 3: Notion Docs
 
